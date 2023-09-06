@@ -1,0 +1,808 @@
+## Retail Store Prediction_Random Forest Regression
+## Execute by Debashree Pramanik Manna
+
+## Problem Statement:
+## A retail giant needs to plan its new store openings and  it has multiple locations where the stores can be opened. 
+## It wants to understand which locations would be the best to open new stores in terms of market size and potential revenues. 
+## Relevant data regarding locations, population, sales and revenues of key products for stores opened in the past was provided to be analyzed and for model building.
+
+
+## Evaluation Criteria: auc score for test data should come out to be more than 0.810
+
+
+## Aim
+## Predict if a store should be opened or not in that particular location
+
+## Data Information:
+## Here provided two datasets , store_train.csv and store_test.csv . We need to use data store_train to build predictive model for response variable ‘store’. 
+##store_test data contains all other factors except ‘store’, we need to predict that using the model that we developed and submit our predicted values[probability scores, not the hard classes] in a csv files.
+
+##Step : 1 loading library 
+
+library(dplyr) 
+library(randomForest) 
+library(tidyr)
+library(tree)
+library(pROC)
+library(cvTools)
+library(car)
+
+setwd("/Users/depolopa/Desktop/untitled folder/project/Retail")
+store_train=read.csv("store_train.csv",stringsAsFactors = F)
+
+## 3338 obs and 17 variables
+
+store_test=read.csv("store_test.csv",stringsAsFactors = F) 
+
+## 1431 obs and 16 variables
+
+## Step : 2
+##Combining both train n test datasets prior to data preparation.
+## Before combining, we need some placeholder column where we can see the difference between two datasets train and test data. 
+## Also we’ll need to add a column for response to test data so that we have same columns in both train and test. We’ll fill test’s response column with NAs.
+
+store_test$store=NA
+store_train$data='train'
+store_test$data='test'
+store_all=rbind(store_train,store_test)
+glimpse(store_all) 
+
+
+
+##  
+## Rows: 4,769
+## Columns: 18
+## $ Id             <dbl> 2300919770, 5000129575, 25013…
+## $ sales0         <int> 848, 925, 924, 924, 1017, 149…
+## $ sales1         <int> 588, 717, 616, 646, 730, 1071…
+## $ sales2         <int> 666, 780, 739, 683, 735, 1196…
+## $ sales3         <int> 1116, 1283, 1154, 1292, 1208,…
+## $ sales4         <int> 1133, 1550, 1314, 1297, 1326,…
+## $ country        <int> 9, 1, 13, 35, 27, 9, 103, 183…
+## $ State          <int> 23, 50, 25, 6, 50, 25, 26, 37…
+## $ CouSub         <int> 19770, 29575, 8470, 99999, 60…
+## $ countyname     <chr> "Hancock County", "Addison Co…
+## $ storecode      <chr> "NCNTY23009N23009", "NCNTY500…
+## $ Areaname       <chr> "Hancock County, ME", "Addiso…
+## $ countytownname <chr> "Eastbrook town", "Granville …
+## $ population     <int> 423, 298, 3609, 34895, 1139, …
+## $ state_alpha    <chr> "ME", "VT", "MA", "CA", "VT",…
+## $ store_Type     <chr> "Supermarket Type1", "Superma…
+## $ store          <int> 0, 0, 1, 0, 0, 0, 0, 1, 1, 0,…
+## $ data           <chr> "train", "train", "train", "t…
+## > 
+
+
+
+sum(unique(table(store_all$state_alpha)))
+
+## [1] 4499
+
+
+### we will drop state_alpha,countyname,countytownname and Areaname because they are having too many unique values.
+
+store_all=store_all %>% 
+  select(-state_alpha)
+
+store_all=store_all %>% 
+  select(-countyname)
+
+store_all=store_all %>% 
+  select(-countytownname)
+
+store_all=store_all %>% 
+  select(-Areaname) 
+
+
+
+### Country have 1 NA and population have 2 ###
+
+
+store_all$population[is.na(store_all$population)]=round(mean(store_all$population,na.rm=T),0)
+store_all$country[is.na(store_all$country)]=round(mean(store_all$country,na.rm=T),0) 
+
+
+
+### convert char columns into categorical columns ###
+
+
+CreateDummies=function(data,var,freq_cutoff=0){
+  t=table(data[,var])
+  t=t[t>freq_cutoff]
+  t=sort(t)
+  categories=names(t)[-1]
+  
+  for( cat in categories){
+    name=paste(var,cat,sep="_")
+    name=gsub(" ","",name)
+    name=gsub("-","_",name)
+    name=gsub("\\?","Q",name)
+    name=gsub("<","LT_",name)
+    name=gsub("\\+","",name)
+    name=gsub("\\/","_",name)
+    name=gsub(">","GT_",name)
+    name=gsub("=","EQ_",name)
+    name=gsub(",","",name)
+    
+    data[,name]=as.numeric(data[,var]==cat)
+  }
+  
+  data[,var]=NULL
+  return(data)
+}
+
+char_logical=sapply(store_all,is.character)
+cat_cols=names(store_all)[char_logical]
+cat_cols=cat_cols[!(cat_cols %in% c('data','store'))]
+cat_cols 
+
+#### 
+[1] "storecode"  "store_Type"
+####
+
+### create dummies for character variable
+
+
+for(col in cat_cols){
+  store_all=CreateDummies(store_all,col,50)
+}
+
+glimpse(store_all)
+
+
+
+#########
+## Rows: 4,769
+## Columns: 18
+## $ Id                          <dbl> 2300919770, 5000…
+## $ sales0                      <int> 848, 925, 924, 9…
+## $ sales1                      <int> 588, 717, 616, 6…
+## $ sales2                      <int> 666, 780, 739, 6…
+## $ sales3                      <int> 1116, 1283, 1154…
+## $ sales4                      <int> 1133, 1550, 1314…
+## $ country                     <dbl> 9, 1, 13, 35, 27…
+## $ State                       <int> 23, 50, 25, 6, 5…
+## $ CouSub                      <int> 19770, 29575, 84…
+## $ population                  <dbl> 423, 298, 3609, …
+## $ store                       <int> 0, 0, 1, 0, 0, 0…
+## $ data                        <chr> "train", "train"…
+## $ storecode_METRO12620N23019  <dbl> 0, 0, 0, 0, 0, 0…
+## $ storecode_NCNTY23003N23003  <dbl> 0, 0, 0, 0, 0, 0…
+## $ storecode_METRO14460MM1120  <dbl> 0, 0, 0, 0, 0, 1…
+## $ store_Type_SupermarketType3 <dbl> 0, 0, 0, 1, 0, 1…
+## $ store_Type_GroceryStore     <dbl> 0, 0, 0, 0, 0, 0…
+## $ store_Type_SupermarketType1 <dbl> 1, 1, 1, 0, 1, 0…
+## > 
+
+#####
+
+## Check is there any NA, if yes then remove
+
+
+
+store_all=store_all[!((is.na(store_all$store)) & store_all$data=='train'), ]
+for(col in names(store_all)){
+  if(sum(is.na(store_all[,col]))>0 & !(col %in% c("data","store"))){
+    store_all[is.na(store_all[,col]),col]=mean(store_all[store_all$data=='train',col],na.rm=T)
+  }
+}
+
+any(is.na(store_all))
+
+## [1] TRUE
+
+sum(is.na(store_all)) # For entire dataset 
+
+## [1] 1431
+
+colSums(is.na(store_all)) #it is for response var
+
+####     
+                        ## Id 
+                         ## 0 
+                     ## sales0 
+                          ## 0 
+                     ## sales1 
+                          ## 0 
+                     ## sales2 
+                          ## 0 
+                     ## sales3 
+                          ## 0 
+                     ## sales4 
+                          ## 0 
+                    ## country 
+                          ## 0 
+                    ##   State 
+                          ## 0 
+                     ## CouSub 
+                          ## 0 
+                 ## population 
+                          ## 0 
+                      ## store 
+                       ## 1431 
+                       ## data 
+                          ## 0 
+ ## storecode_METRO12620N23019 
+                          ## 0 
+ ## storecode_NCNTY23003N23003 
+                          ## 0 
+ ## storecode_METRO14460MM1120 
+                          ## 0 
+## store_Type_SupermarketType3 
+                          ## 0 
+   ##  store_Type_GroceryStore 
+                          ## 0 
+## store_Type_SupermarketType1 
+                          ## 0 
+> 
+
+##
+
+
+## Now data preparation is done and we will now seperate both test and train data sets.
+
+
+store_train=store_all %>% filter(data=='train') %>% select(-data)
+store_test=store_all %>% filter(data=='test') %>% select(-data,-store)
+
+
+
+
+## Step 3: Model Building
+
+## We will use train for logistic regression model building and use train_80 to test_20 the performance of the model thus built.
+## Lets build tree model on train dataset.
+
+
+set.seed(2)
+s=sample(1:nrow(store_train),0.80*nrow(store_train))
+train_80=store_train[s,] 
+test_20=store_train[-s,]  
+
+## Lets see how it performed on the validation set. Notice the difference how we get probability prediction from a tree model. By default it gives probability for both the classes , we only need one , thats why the square bracket at the end for subsetting.
+## Since it is classification problem , We will try logistic regression.
+## __ Logistic Regression__
+
+
+
+## lets remove vars which have redundant information first on the basis of vif
+
+for_vif=lm(store~.-Id-sales0-sales2-sales3-sales1,data=train_80)
+sort(vif(for_vif),decreasing = T)[1:3]
+
+
+######
+store_Type_SupermarketType1 
+                   2.536593 
+    store_Type_GroceryStore 
+                   1.988378 
+store_Type_SupermarketType3 
+                   1.823151 
+> #########
+
+
+
+summary(for_vif)
+
+######
+
+## Call:
+## lm(formula = store ~ . - Id - sales0 - sales2 - sales3 - sales1, 
+##    data = train_80)
+
+## Residuals:
+##    Min      1Q  Median      3Q     Max 
+## -1.2412 -0.3700 -0.2749  0.5019  0.8541 
+
+## Coefficients:
+                              Estimate Std. Error
+## (Intercept)                 -1.356e-01  6.490e-02
+## sales4                       4.144e-04  3.166e-05
+## country                      6.161e-06  1.025e-04
+## State                        1.547e-04  6.089e-04
+## CouSub                       4.598e-07  3.545e-07
+## population                   2.245e-07  3.925e-08
+## storecode_METRO12620N23019   6.201e-01  9.122e-02
+## storecode_NCNTY23003N23003  -1.178e-01  8.127e-02
+## storecode_METRO14460MM1120   9.882e-02  6.176e-02
+## store_Type_SupermarketType3 -5.934e-03  3.916e-02
+## store_Type_GroceryStore     -1.949e-03  3.728e-02
+## store_Type_SupermarketType1  1.466e-02  3.014e-02
+##                             t value Pr(>|t|)    
+## (Intercept)                  -2.089   0.0368 *  
+## sales4                       13.087  < 2e-16 ***
+## country                       0.060   0.9521    
+## State                         0.254   0.7995    
+## CouSub                        1.297   0.1947    
+## population                    5.719 1.19e-08 ***
+## storecode_METRO12620N23019    6.798 1.30e-11 ***
+## storecode_NCNTY23003N23003   -1.450   0.1473    
+## storecode_METRO14460MM1120    1.600   0.1097    
+## store_Type_SupermarketType3  -0.152   0.8796    
+## store_Type_GroceryStore      -0.052   0.9583    
+## store_Type_SupermarketType1   0.486   0.6268    
+## ---
+## Signif. codes:  
+## 0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+
+## Residual standard error: 0.4649 on 2658 degrees of freedom
+## Multiple R-squared:  0.1286,	Adjusted R-squared:  0.125 
+## F-statistic: 35.65 on 11 and 2658 DF,  p-value: < 2.2e-16
+
+## > ################
+
+
+## Build Logistic Model
+
+fit=glm(store~.-Id-sales0-sales2-sales3-sales1,data=train_80) #32 predictor var
+fit=step(fit)
+
+
+## Start:  AIC=3500.77
+## store ~ (Id + sales0 + sales1 + sales2 + sales3 + sales4 + country + 
+##     State + CouSub + population + storecode_METRO12620N23019 + 
+##     storecode_NCNTY23003N23003 + storecode_METRO14460MM1120 + 
+##     store_Type_SupermarketType3 + store_Type_GroceryStore + store_Type_SupermarketType1) - 
+##     Id - sales0 - sales2 - sales3 - sales1
+## 
+##                              Df Deviance    AIC
+## - store_Type_GroceryStore      1   574.43 3498.8
+## - country                      1   574.43 3498.8
+## - store_Type_SupermarketType3  1   574.43 3498.8
+## - State                        1   574.44 3498.8
+## - store_Type_SupermarketType1  1   574.48 3499.0
+## - CouSub                       1   574.79 3500.5
+## <none>                             574.42 3500.8
+## - storecode_NCNTY23003N23003   1   574.88 3500.9
+## - storecode_METRO14460MM1120   1   574.98 3501.3
+## - population                   1   581.49 3531.4
+## - storecode_METRO12620N23019   1   584.41 3544.8
+## - sales4                       1   611.44 3665.5
+
+## Step:  AIC=3498.77
+## store ~ sales4 + country + State + CouSub + population + storecode_METRO12620N23019 + 
+##     storecode_NCNTY23003N23003 + storecode_METRO14460MM1120 + 
+##     store_Type_SupermarketType3 + store_Type_SupermarketType1
+## 
+##                               Df Deviance    AIC
+## - country                      1   574.43 3496.8
+## - store_Type_SupermarketType3  1   574.43 3496.8
+## - State                        1   574.44 3496.8
+## - store_Type_SupermarketType1  1   574.54 3497.3
+## - CouSub                       1   574.79 3498.5
+## <none>                             574.43 3498.8
+## - storecode_NCNTY23003N23003   1   574.88 3498.9
+## - storecode_METRO14460MM1120   1   574.98 3499.3
+## - population                   1   581.50 3529.4
+## - storecode_METRO12620N23019   1   584.43 3542.9
+## - sales4                       1   611.44 3663.5
+## 
+## Step:  AIC=3496.78
+## store ~ sales4 + State + CouSub + population + storecode_METRO12620N23019 + 
+##    storecode_NCNTY23003N23003 + storecode_METRO14460MM1120 + 
+##    store_Type_SupermarketType3 + store_Type_SupermarketType1
+## 
+##                               Df Deviance    AIC
+## - store_Type_SupermarketType3  1   574.43 3494.8
+## - State                        1   574.44 3494.8
+## - store_Type_SupermarketType1  1   574.54 3495.3
+## - CouSub                       1   574.85 3496.7
+## <none>                             574.43 3496.8
+## - storecode_NCNTY23003N23003   1   574.88 3496.9
+## - storecode_METRO14460MM1120   1   574.98 3497.3
+## - population                   1   581.50 3527.4
+## - storecode_METRO12620N23019   1   584.43 3540.9
+## - sales4                       1   611.44 3661.5
+## 
+## Step:  AIC=3494.8
+## store ~ sales4 + State + CouSub + population + storecode_METRO12620N23019 + 
+##     storecode_NCNTY23003N23003 + storecode_METRO14460MM1120 + 
+##    store_Type_SupermarketType1
+## 
+##                               Df Deviance    AIC
+## - State                        1   574.45 3492.9
+## - store_Type_SupermarketType1  1   574.61 3493.6
+## - CouSub                       1   574.85 3494.8
+## <none>                             574.43 3494.8
+## - storecode_NCNTY23003N23003   1   574.89 3494.9
+## - storecode_METRO14460MM1120   1   574.99 3495.4
+## - population                   1   581.50 3525.4
+## - storecode_METRO12620N23019   1   584.43 3538.9
+## - sales4                       1   611.47 3659.6
+## 
+## Step:  AIC=3492.87
+## store ~ sales4 + CouSub + population + storecode_METRO12620N23019 + 
+##     storecode_NCNTY23003N23003 + storecode_METRO14460MM1120 + 
+##     store_Type_SupermarketType1
+## 
+##                               Df Deviance    AIC
+## - store_Type_SupermarketType1  1   574.63 3491.7
+## - CouSub                       1   574.87 3492.8
+## <none>                             574.45 3492.9
+## - storecode_NCNTY23003N23003   1   574.92 3493.1
+## - storecode_METRO14460MM1120   1   575.00 3493.4
+## - population                   1   581.50 3523.5
+## - storecode_METRO12620N23019   1   584.43 3536.9
+## - sales4                       1   611.68 3658.5
+## 
+## Step:  AIC=3491.7
+## store ~ sales4 + CouSub + population + storecode_METRO12620N23019 + 
+##     storecode_NCNTY23003N23003 + storecode_METRO14460MM1120
+## 
+##                              Df Deviance    AIC
+## - CouSub                      1   575.05 3491.7
+## <none>                            574.63 3491.7
+## - storecode_NCNTY23003N23003  1   575.08 3491.8
+## - storecode_METRO14460MM1120  1   575.18 3492.3
+## - population                  1   581.76 3522.6
+## - storecode_METRO12620N23019  1   584.58 3535.6
+## - sales4                      1   611.85 3657.3
+## 
+## Step:  AIC=3491.67
+## store ~ sales4 + population + storecode_METRO12620N23019 + storecode_NCNTY23003N23003 + 
+##     storecode_METRO14460MM1120
+## 
+##                              Df Deviance    AIC
+## <none>                            575.05 3491.7
+## - storecode_METRO14460MM1120  1   575.57 3492.1
+## - storecode_NCNTY23003N23003  1   575.71 3492.7
+## - population                  1   583.70 3529.6
+## - storecode_METRO12620N23019  1   584.62 3533.7
+## - sales4                      1   615.43 3670.9
+## > ########
+
+
+
+
+
+summary(fit)
+
+## Call:
+## glm(formula = store ~ sales4 + population + storecode_METRO12620N23019 + 
+    storecode_NCNTY23003N23003 + storecode_METRO14460MM1120, 
+    data = train_80)
+
+## Deviance Residuals: 
+##     Min       1Q   Median       3Q      Max  
+## -1.2487  -0.3725  -0.2735   0.5001   0.8343  
+
+## Coefficients:
+##                              Estimate Std. Error
+## (Intercept)                -6.310e-02  3.547e-02
+## sales4                      3.963e-04  2.898e-05
+## population                  2.394e-07  3.781e-08
+## storecode_METRO12620N23019  5.990e-01  8.998e-02
+## storecode_NCNTY23003N23003 -1.390e-01  7.941e-02
+## storecode_METRO14460MM1120  9.569e-02  6.167e-02
+##                            t value Pr(>|t|)    
+## (Intercept)                 -1.779   0.0754 .  
+## sales4                      13.677  < 2e-16 ***
+## population                   6.333 2.82e-10 ***
+## storecode_METRO12620N23019   6.658 3.37e-11 ***
+## storecode_NCNTY23003N23003  -1.750   0.0802 .  
+## storecode_METRO14460MM1120   1.552   0.1208    
+## ---
+## Signif. codes:  
+## 0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+## 
+## (Dispersion parameter for gaussian family taken to be 0.2158589)
+
+##     Null deviance: 659.19  on 2669  degrees of freedom
+## Residual deviance: 575.05  on 2664  degrees of freedom
+## AIC: 3491.7
+
+## Number of Fisher Scoring iterations: 2
+
+## > #############
+
+
+
+
+
+
+formula(fit)
+
+
+###store ~ sales4 + population + storecode_METRO12620N23019 + storecode_NCNTY23003N23003 + 
+    storecode_METRO14460MM1120
+
+
+
+fit=glm(store ~ sales4 + population + storecode_METRO12620N23019 + storecode_NCNTY23003N23003 + 
+          storecode_METRO14460MM1120,data=train_80) #32 predictor var
+
+library(pROC)
+scoreLG=predict(fit,newdata =test_20,type = "response")
+roccurve=roc(test_20$store,scoreLG) 
+
+## Setting levels: control = 0, case = 1
+## Setting direction: controls < cases 
+
+auc(roccurve)
+
+## Area under the curve: 0.7043
+## > 
+
+
+## decision tree
+
+
+DT= tree(as.factor(store)~.-Id,data=train_80)
+
+DTscore=predict(DT,newdata=test_20,type="vector")[,2]
+
+##Setting levels: control = 0, case = 1
+##Setting direction: controls < cases
+
+
+auc(roc(test_20$store,DTscore))
+
+
+## Area under the curve: 0.7379
+> ##
+
+
+#Random forest
+
+
+rf.model3= randomForest(as.factor(store)~.-Id,data=train_80)
+test.score3=predict(rf.model3,newdata=test_20,type="prob")[,2]
+auc(roc(test_20$store,test.score3))
+
+###Setting levels: control = 0, case = 1
+Setting direction: controls < cases
+Area under the curve: 0.8079
+> ####
+
+### Hence, Random Forest gives better score,Make predictions on test and submit
+Now We will use Random Forest for Parameter tunning
+
+
+############################################################################
+
+library(cvTools)
+
+store_train$store=as.factor(store_train$store)
+glimpse(store_train)
+
+### Rows: 3,338
+Columns: 17
+$ Id                          <dbl> 2300919770, 5000…
+$ sales0                      <int> 848, 925, 924, 9…
+$ sales1                      <int> 588, 717, 616, 6…
+$ sales2                      <int> 666, 780, 739, 6…
+$ sales3                      <int> 1116, 1283, 1154…
+$ sales4                      <int> 1133, 1550, 1314…
+$ country                     <dbl> 9, 1, 13, 35, 27…
+$ State                       <int> 23, 50, 25, 6, 5…
+$ CouSub                      <int> 19770, 29575, 84…
+$ population                  <dbl> 423, 298, 3609, …
+$ store                       <fct> 0, 0, 1, 0, 0, 0…
+$ storecode_METRO12620N23019  <dbl> 0, 0, 0, 0, 0, 0…
+$ storecode_NCNTY23003N23003  <dbl> 0, 0, 0, 0, 0, 0…
+$ storecode_METRO14460MM1120  <dbl> 0, 0, 0, 0, 0, 1…
+$ store_Type_SupermarketType3 <dbl> 0, 0, 0, 1, 0, 1…
+$ store_Type_GroceryStore     <dbl> 0, 0, 0, 0, 0, 0…
+$ store_Type_SupermarketType1 <dbl> 1, 1, 1, 0, 1, 0…
+> ########
+
+
+#######Use full train data because here we are doing CV
+
+#Parameter value we want to try out
+# mtry: There will be upper limit. Upper limit means no of predictor in the data. Good idea is to start with 4 or 5 then go to no of variables in the data
+# ntree: This is number of trees in the forest.There is no limit on it as such , a good starting point is 10 to 500 and you can try out values as large as 1000,5000. Although very high number of trees make sense when the data is huge as well. Default value is 500.
+# max nodes: start with 5 there is, there is no limitation this as such but good range to try can be between 1 to 20. Default value is 1.
+# node size:There is no limit on this as such but good range to try can be between 1 to 20. Default value is 1.If values comes at edge then try to expand
+
+
+
+
+param=list(mtry=c(3,4,6,8,10),
+           ntree=c(50,100,200,500,700,800,900), 
+           maxnodes=c(5,10,15,20,30,50,100,300,500,600,700),
+           nodesize=c(1,2,5,10,20,30,40)       
+)
+
+
+
+mycost_auc=function(store,yhat){  #Real #Predicted
+  roccurve=pROC::roc(store,yhat)
+  score=pROC::auc(roccurve)
+  return(score)
+}  
+
+
+
+
+#We are looking at 5*7*11*7 combination. Hence it will took an hour to run
+
+## Function for selecting random subset of params
+
+
+subset_paras=function(full_list_para,n=10){  #n=10 is default, you can give higher value
+  
+  all_comb=expand.grid(full_list_para)
+  
+  s=sample(1:nrow(all_comb),n)
+  
+  subset_para=all_comb[s,]
+  
+  return(subset_para)
+}
+
+num_trial=100
+my_params=subset_paras(param,num_trial)
+my_params
+
+####     mtry ntree maxnodes nodesize
+2690   10   800      700       40
+2097    4   900       30       30
+1364    8   900       50       10
+1897    4   100      700       20
+917     4   100       30        5
+2175   10    50      300       30
+2009    8   200       15       30
+1954    8   800        5       30
+1889    8   900      600       20
+1487    4   500      600       10
+162     4   700       30        1
+2349    8    50       10       40
+2238    6   900      500       30
+2659    8   900      600       40
+2321    3   200        5       40
+454     8   900       10        2
+621     3   800      100        2
+2546    3   800      100       40
+1040   10   700      300        5
+363     6   200      700        1
+1724    8   100       50       20
+1935   10   100        5       30
+1997    4    50       15       30
+148     6   100       30        1
+1072    4   700      500        5
+41      3   100       10        1
+242     4   900      100        1
+1060   10   100      500        5
+539     8   200       30        2
+2117    4   500       50       30
+2027    4   900       15       30
+62      4   800       10        1
+1188    6   900        5       10
+2294    8   500      700       30
+1945   10   500        5       30
+1800   10   200      300       20
+1316    3   700       30       10
+1864    8   100      600       20
+2678    6   500      700       40
+372     4   700      700        1
+2296    3   700      700       30
+36      3    50       10        1
+2378    6   900       10       40
+943     6   900       30        5
+48      6   200       10        1
+674     8   100      500        2
+1379    8   200      100       10
+2275   10   900      600       30
+1184    8   800        5       10
+149     8   100       30        1
+1303    6   100       30       10
+1830   10   100      500       20
+1992    4   900       10       30
+1688    6   100       30       20
+603     6   100      100        2
+133     6   800       20        1
+1938    6   200        5       30
+909     8   900       20        5
+682     4   500      500        2
+1113    6   800      600        5
+1567    4   800        5       20
+1803    6   500      300       20
+643     6   200      300        2
+159     8   500       30        1
+543     6   500       30        2
+2132    4   900       50       30
+641     3   200      300        2
+1825   10    50      500       20
+778     6   100        5        5
+1437    4    50      500       10
+2168    6   900      100       30
+325    10   100      600        1
+1333    6    50       50       10
+1415   10   200      300       10
+996     3   500      100        5
+370    10   500      700        1
+1109    8   700      600        5
+1731    3   500       50       20
+1469    8   900      500       10
+1149    8   800      700        5
+620    10   700      100        2
+2590   10   900      300       40
+1874    8   500      600       20
+581     3   700       50        2
+1479    8   100      600       10
+859     8   500       15        5
+1143    6   700      700        5
+283     6    50      500        1
+2559    8    50      300       40
+516     3   800       20        2
+194     8   500       50        1
+1389    8   700      100       10
+686     3   700      500        2
+2624    8   900      500       40
+381     3   900      700        1
+2101    3    50       50       30
+2113    6   200       50       30
+824     8   500       10        5
+219     8   100      100        1
+1531    3   800      700       10
+> ################################
+
+
+myauc=0
+
+
+
+for(i in 1:num_trial){  
+  #print(paste('starting iteration :',i))
+  # uncomment the line above to keep track of progress
+  params=my_params[i,]
+  
+  k=cvTuning(randomForest,
+             store~.-Id, 
+             data =store_train,
+             tuning =params,
+             folds = cvFolds(nrow(store_train), K=15, type ="random"),
+             cost =mycost_auc, 
+             seed =2,
+             predictArgs = list(type="prob"))
+  
+  score.this=k$cv[,2]
+  
+  ## It took almost hours to run because we are trying 2695 combinations 
+  
+  
+  if(score.this>myauc){
+    #print(params)
+    #uncomment the line above to keep track of progress
+    myauc=score.this
+    #print(myauc)
+    #uncomment the line above to keep track of progress
+    #print(myauc)
+    best_params=params
+  }
+  
+  
+  
+  #print('DONE')
+}
+
+myauc
+## [1] 0.8184884
+
+
+best_params
+## This is the tentative performance measure. The best paramters are,
+##      mtry ntree maxnodes nodesize
+## 1076    3   800      500        5
+##########################################################################
+
+
+## Lets use these to build our final model.
+
+ci.rf.final=randomForest(store~.-Id,
+                         mtry=best_params$mtry,
+                         ntree=best_params$ntree,
+                         maxnodes=best_params$maxnodes,
+                         nodesize=best_params$nodesize,
+                         data=store_train
+)
+
+
+test.score_final=predict(ci.rf.final,newdata=store_test, type="prob")[,2]
+write.csv(test.score_final,'Debashree_Pramanik_Manna_P2_part2.csv',row.names = F)
+
+
+
+
+  
